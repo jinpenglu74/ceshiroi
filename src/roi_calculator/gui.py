@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
     QDoubleValidator,
@@ -13,6 +14,7 @@ from PySide6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QRadialGradient,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -33,180 +35,138 @@ from PySide6.QtWidgets import (
 )
 
 from .domain import RoiInputs, calculate
+from .theme import (
+    AMBER,
+    APP_QSS,
+    BLUE,
+    CYAN,
+    GREEN,
+    MUTED,
+    PINK,
+    PURPLE,
+    add_glow,
+)
 from .version import __version__
 
 
-APP_QSS = """
-* {
-    color: #dcecff;
-    font-family: "Microsoft YaHei UI";
-    font-size: 14px;
-}
-QMainWindow, QWidget#root {
-    background: #03132d;
-}
-QFrame#topbar {
-    background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #061d45,stop:0.48 #041736,stop:1 #061c41);
-    border: 1px solid #0b65ad;
-    border-radius: 14px;
-}
-QFrame#panel {
-    background: #061e42;
-    border: 1px solid #0876c7;
-    border-radius: 14px;
-}
-QFrame#section {
-    background: #07254d;
-    border: 1px solid #0b5d9d;
-    border-radius: 10px;
-}
-QFrame#hero {
-    background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #082b5d,stop:0.60 #061b3a,stop:1 #08264e);
-    border: 1px solid #19c7ff;
-    border-radius: 12px;
-}
-QFrame#metricCard {
-    background: #082750;
-    border: 1px solid #0b72bd;
-    border-radius: 10px;
-}
-QFrame#tipCard {
-    background: #26321f;
-    border: 1px solid #dfbd42;
-    border-radius: 10px;
-}
-QLabel#title {
-    color: #ffffff;
-    font-size: 30px;
-    font-weight: 900;
-}
-QLabel#subtitle {
-    color: #99b6d7;
-    font-size: 13px;
-}
-QLabel#eyebrow {
-    color: #2b8fcb;
-    font-size: 10px;
-    letter-spacing: 4px;
-}
-QLabel#sectionTitle {
-    color: #edf8ff;
-    font-size: 18px;
-    font-weight: 800;
-}
-QLabel#subSectionTitle {
-    color: #eaf6ff;
-    font-size: 16px;
-    font-weight: 800;
-}
-QLabel#hint {
-    color: #91acd0;
-    font-size: 12px;
-}
-QLabel#metric {
-    color: #61dfff;
-    font-size: 56px;
-    font-weight: 900;
-}
-QLabel#metricCaption {
-    color: #c8dcf1;
-    font-size: 13px;
-}
-QLabel#smallMetric {
-    color: #ffffff;
-    font-size: 22px;
-    font-weight: 850;
-}
-QLabel#unit {
-    color: #a8c2df;
-    font-size: 13px;
-}
-QLabel#formula {
-    color: #c9ddf4;
-    font-size: 13px;
-}
-QLabel#tipTitle {
-    color: #ffdf73;
-    font-size: 15px;
-    font-weight: 800;
-}
-QLineEdit {
-    background: #051a37;
-    color: #f3f8ff;
-    border: 1px solid #195f9d;
-    border-radius: 7px;
-    padding: 9px 12px;
-    font-size: 15px;
-}
-QLineEdit:focus {
-    border: 1px solid #2ed4ff;
-    background: #062142;
-}
-QPushButton {
-    min-height: 22px;
-    color: #e9f6ff;
-    background: #0a4d8c;
-    border: 1px solid #25aee9;
-    border-radius: 8px;
-    padding: 9px 18px;
-    font-weight: 800;
-}
-QPushButton:hover {
-    background: #0d67b5;
-    border: 1px solid #5ee9ff;
-}
-QPushButton:pressed {
-    background: #073d71;
-}
-QPushButton#primary {
-    background: #0761e9;
-    border: 1px solid #56efff;
-}
-QPushButton#primary:hover {
-    background: #0c79ff;
-}
-QPushButton#ghost {
-    background: #082746;
-}
-QRadioButton {
-    spacing: 8px;
-    padding: 7px 4px;
-    color: #e8f3ff;
-    font-weight: 700;
-}
-QRadioButton::indicator {
-    width: 17px;
-    height: 17px;
-}
-QProgressBar {
-    background: #09203e;
-    border: 1px solid #174f7d;
-    border-radius: 7px;
-    height: 13px;
-    text-align: center;
-}
-QProgressBar::chunk {
-    border-radius: 6px;
-    background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #ff316c,stop:0.50 #43baff,stop:1 #43efad);
-}
-"""
+class TechBackdrop(QWidget):
+    """Animated HUD-style background with grid, nodes and a subtle scan line."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("root")
+        self._scan = 0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(55)
+
+    def _tick(self) -> None:
+        self._scan = (self._scan + 3) % max(1, self.height())
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        bg = QLinearGradient(0, 0, self.width(), self.height())
+        bg.setColorAt(0.0, QColor("#020713"))
+        bg.setColorAt(0.50, QColor("#03142B"))
+        bg.setColorAt(1.0, QColor("#041B34"))
+        painter.fillRect(self.rect(), bg)
+
+        grid_pen = QPen(QColor(33, 127, 190, 28), 1)
+        painter.setPen(grid_pen)
+        step = 44
+        for x in range(0, self.width(), step):
+            painter.drawLine(x, 0, x, self.height())
+        for y in range(0, self.height(), step):
+            painter.drawLine(0, y, self.width(), y)
+
+        # Circuit paths.
+        circuit_pen = QPen(QColor(39, 203, 237, 40), 1)
+        painter.setPen(circuit_pen)
+        points = [
+            (0.04, 0.15, 0.20, 0.15, 0.24, 0.10),
+            (0.72, 0.13, 0.88, 0.13, 0.93, 0.19),
+            (0.07, 0.78, 0.19, 0.78, 0.24, 0.84),
+            (0.76, 0.77, 0.91, 0.77, 0.95, 0.72),
+        ]
+        for x1, y1, x2, y2, x3, y3 in points:
+            path = QPainterPath()
+            path.moveTo(self.width() * x1, self.height() * y1)
+            path.lineTo(self.width() * x2, self.height() * y2)
+            path.lineTo(self.width() * x3, self.height() * y3)
+            painter.drawPath(path)
+            painter.setBrush(QColor(55, 230, 255, 90))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(
+                QPointF(self.width() * x3, self.height() * y3),
+                2.8,
+                2.8,
+            )
+            painter.setPen(circuit_pen)
+
+        # Soft radial glows in opposite corners.
+        for cx, cy, color in (
+            (self.width() * 0.08, self.height() * 0.13, QColor(0, 122, 255, 75)),
+            (self.width() * 0.92, self.height() * 0.72, QColor(0, 221, 255, 55)),
+        ):
+            radial = QRadialGradient(cx, cy, 260)
+            radial.setColorAt(0.0, color)
+            faded = QColor(color)
+            faded.setAlpha(0)
+            radial.setColorAt(1.0, faded)
+            painter.setBrush(radial)
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(QPointF(cx, cy), 260, 260)
+
+        # Horizontal scan line.
+        scan = QLinearGradient(0, self._scan - 16, 0, self._scan + 16)
+        scan.setColorAt(0.0, QColor(33, 221, 255, 0))
+        scan.setColorAt(0.5, QColor(33, 221, 255, 23))
+        scan.setColorAt(1.0, QColor(33, 221, 255, 0))
+        painter.fillRect(0, self._scan - 16, self.width(), 32, scan)
+
+
+class HudFrame(QFrame):
+    """Panel with small bright corner brackets."""
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor(53, 230, 255, 155), 2)
+        painter.setPen(pen)
+
+        inset = 7
+        length = 18
+        w = self.width() - inset
+        h = self.height() - inset
+
+        corners = (
+            ((inset, inset + length), (inset, inset), (inset + length, inset)),
+            ((w - length, inset), (w, inset), (w, inset + length)),
+            ((inset, h - length), (inset, h), (inset + length, h)),
+            ((w - length, h), (w, h), (w, h - length)),
+        )
+        for a, b, c in corners:
+            painter.drawLine(*a, *b)
+            painter.drawLine(*b, *c)
 
 
 def separator() -> QFrame:
     line = QFrame()
     line.setFixedHeight(1)
-    line.setStyleSheet("background:#164d78;border:none;")
+    line.setStyleSheet(
+        "background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+        "stop:0 rgba(41,210,255,0),stop:0.50 rgba(41,210,255,130),"
+        "stop:1 rgba(41,210,255,0));border:none;"
+    )
     return line
 
 
 class MoneyField(QWidget):
-    def __init__(
-        self,
-        title: str,
-        *,
-        percent: bool = False,
-        prefix: str = "¥",
-    ) -> None:
+    def __init__(self, title: str, *, percent: bool = False) -> None:
         super().__init__()
         self.percent = percent
 
@@ -221,12 +181,13 @@ class MoneyField(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(7)
 
-        prefix_label = QLabel("%" if percent else prefix)
-        prefix_label.setAlignment(Qt.AlignCenter)
-        prefix_label.setFixedWidth(32)
-        prefix_label.setStyleSheet(
-            "background:#082850;border:1px solid #174f82;border-radius:7px;"
-            "font-weight:800;color:#8fc9f2;padding:8px 0;"
+        unit_text = "%" if percent else "¥"
+        prefix = QLabel(unit_text)
+        prefix.setAlignment(Qt.AlignCenter)
+        prefix.setFixedWidth(34)
+        prefix.setStyleSheet(
+            "background:#08264B;border:1px solid #1A699E;border-radius:7px;"
+            "font-weight:900;color:#43DDFB;padding:8px 0;"
         )
 
         self.edit = QLineEdit("0.00")
@@ -240,7 +201,7 @@ class MoneyField(QWidget):
         suffix.setObjectName("unit")
         suffix.setFixedWidth(28)
 
-        row.addWidget(prefix_label)
+        row.addWidget(prefix)
         row.addWidget(self.edit, 1)
         row.addWidget(suffix)
 
@@ -257,12 +218,12 @@ class MoneyField(QWidget):
         self.edit.setText(f"{value:.2f}")
 
 
-class MetricCard(QFrame):
+class MetricCard(HudFrame):
     def __init__(self, symbol: str, title: str, accent: str) -> None:
         super().__init__()
         self.setObjectName("metricCard")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setMinimumHeight(88)
+        self.setMinimumHeight(92)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(14, 12, 14, 12)
@@ -270,11 +231,12 @@ class MetricCard(QFrame):
 
         icon = QLabel(symbol)
         icon.setAlignment(Qt.AlignCenter)
-        icon.setFixedSize(52, 52)
+        icon.setFixedSize(54, 54)
         icon.setStyleSheet(
-            f"background:#0a315e;border:1px solid {accent};border-radius:9px;"
-            f"color:{accent};font-size:25px;font-weight:900;"
+            f"background:#092B55;border:1px solid {accent};border-radius:10px;"
+            f"color:{accent};font-size:23px;font-weight:900;"
         )
+        add_glow(icon, accent, 18, 105)
 
         text = QVBoxLayout()
         text.setSpacing(4)
@@ -290,80 +252,93 @@ class MetricCard(QFrame):
         row.addLayout(text, 1)
 
 
-class GrowthArt(QWidget):
+class RoiRadarArt(QWidget):
+    """Decorative data-radar visual for the main result area."""
+
     def __init__(self) -> None:
         super().__init__()
-        self.setMinimumSize(220, 150)
+        self.setMinimumSize(245, 165)
+        self._phase = 0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._animate)
+        self._timer.start(90)
+
+    def _animate(self) -> None:
+        self._phase = (self._phase + 3) % 360
+        self.update()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        width = self.width()
-        height = self.height()
+        w = self.width()
+        h = self.height()
+        center = QPointF(w * 0.69, h * 0.50)
+        radius = min(w, h) * 0.33
 
-        grid_pen = QPen(QColor(16, 91, 150, 80), 1)
-        painter.setPen(grid_pen)
-        for x in range(12, width, 34):
-            painter.drawLine(x, 14, x, height - 14)
-        for y in range(20, height, 28):
-            painter.drawLine(8, y, width - 8, y)
+        for i, alpha in ((1, 80), (2, 55), (3, 35)):
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(48, 212, 255, alpha), 1))
+            painter.drawEllipse(center, radius * i / 3, radius * i / 3)
 
-        gradient = QLinearGradient(0, height, 0, 20)
-        gradient.setColorAt(0.0, QColor("#0e6ed2"))
-        gradient.setColorAt(1.0, QColor("#65f2ff"))
-        painter.setBrush(gradient)
-        painter.setPen(QPen(QColor("#2edcff"), 2))
+        painter.setPen(QPen(QColor(43, 141, 207, 60), 1))
+        for angle in range(0, 360, 45):
+            rad = math.radians(angle)
+            endpoint = QPointF(
+                center.x() + math.cos(rad) * radius,
+                center.y() + math.sin(rad) * radius,
+            )
+            painter.drawLine(center, endpoint)
 
-        base = height - 30
-        bar_width = 26
-        gaps = 18
-        heights = [42, 72, 108]
-        start_x = width * 0.42
-        for index, bar_height in enumerate(heights):
-            x = int(start_x + index * (bar_width + gaps))
+        # Sweeping radar beam.
+        sweep = math.radians(self._phase)
+        endpoint = QPointF(
+            center.x() + math.cos(sweep) * radius,
+            center.y() + math.sin(sweep) * radius,
+        )
+        painter.setPen(QPen(QColor(66, 239, 255, 150), 2))
+        painter.drawLine(center, endpoint)
+
+        # Growth bars.
+        base = h * 0.83
+        xs = [w * 0.08, w * 0.20, w * 0.32]
+        bar_heights = [h * 0.23, h * 0.38, h * 0.55]
+        bar_w = max(15, int(w * 0.07))
+        grad = QLinearGradient(0, base, 0, h * 0.18)
+        grad.setColorAt(0.0, QColor(BLUE))
+        grad.setColorAt(1.0, QColor(CYAN))
+        painter.setBrush(grad)
+        painter.setPen(QPen(QColor(CYAN), 1.5))
+        for x, bh in zip(xs, bar_heights):
             painter.drawRoundedRect(
-                x,
-                base - bar_height,
-                bar_width,
-                bar_height,
+                QRectF(x, base - bh, bar_w, bh),
                 3,
                 3,
             )
 
         path = QPainterPath()
-        path.moveTo(width * 0.18, height * 0.70)
-        path.cubicTo(
-            width * 0.40,
-            height * 0.68,
-            width * 0.55,
-            height * 0.36,
-            width * 0.78,
-            height * 0.24,
-        )
+        path.moveTo(w * 0.07, h * 0.65)
+        path.cubicTo(w * 0.18, h * 0.64, w * 0.28, h * 0.42, w * 0.42, h * 0.29)
         painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(QColor("#6af3ff"), 8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        painter.setPen(QPen(QColor(CYAN), 6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         painter.drawPath(path)
 
         arrow = QPainterPath()
-        arrow.moveTo(width * 0.74, height * 0.17)
-        arrow.lineTo(width * 0.84, height * 0.20)
-        arrow.lineTo(width * 0.80, height * 0.31)
+        arrow.moveTo(w * 0.39, h * 0.21)
+        arrow.lineTo(w * 0.49, h * 0.25)
+        arrow.lineTo(w * 0.43, h * 0.34)
         arrow.closeSubpath()
-        painter.setBrush(QColor("#6af3ff"))
         painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(CYAN))
         painter.drawPath(arrow)
 
 
-class ReturnOption(QFrame):
+class ReturnOption(HudFrame):
     def __init__(self, radio: QRadioButton, symbol: str, subtitle: str) -> None:
         super().__init__()
         self.radio = radio
         self.setObjectName("returnOption")
-        self.setStyleSheet(
-            "QFrame#returnOption{background:#08264d;border:1px solid #0b659f;"
-            "border-radius:9px;}QFrame#returnOption:hover{border:1px solid #24caff;}"
-        )
+
         row = QHBoxLayout(self)
         row.setContentsMargins(10, 7, 10, 7)
         row.setSpacing(10)
@@ -371,7 +346,7 @@ class ReturnOption(QFrame):
         icon = QLabel(symbol)
         icon.setAlignment(Qt.AlignCenter)
         icon.setFixedSize(34, 34)
-        icon.setStyleSheet("color:#34e4ff;font-size:22px;font-weight:900;")
+        icon.setStyleSheet("color:#35E6FF;font-size:22px;font-weight:900;")
 
         text = QVBoxLayout()
         text.setSpacing(1)
@@ -382,17 +357,18 @@ class ReturnOption(QFrame):
 
         row.addWidget(icon)
         row.addLayout(text, 1)
+        self.set_selected(False)
 
     def set_selected(self, selected: bool) -> None:
         if selected:
             self.setStyleSheet(
-                "QFrame#returnOption{background:#07325b;border:2px solid #1bd6ff;"
-                "border-radius:9px;}QFrame#returnOption:hover{border:2px solid #63edff;}"
+                "QFrame#returnOption{background:#07325B;border:2px solid #24DFFF;"
+                "border-radius:9px;}QFrame#returnOption:hover{border:2px solid #68F0FF;}"
             )
         else:
             self.setStyleSheet(
-                "QFrame#returnOption{background:#08264d;border:1px solid #0b659f;"
-                "border-radius:9px;}QFrame#returnOption:hover{border:1px solid #24caff;}"
+                "QFrame#returnOption{background:#08264D;border:1px solid #0B659F;"
+                "border-radius:9px;}QFrame#returnOption:hover{border:1px solid #24CAFF;}"
             )
 
 
@@ -400,8 +376,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"ROI智能计算器  v{__version__}")
-        self.resize(1560, 900)
-        self.setMinimumSize(1200, 760)
+        self.resize(1580, 920)
+        self.setMinimumSize(1220, 780)
 
         self._build_ui()
         self._load_settings()
@@ -416,8 +392,7 @@ class MainWindow(QMainWindow):
         return root / "settings.json"
 
     def _build_ui(self) -> None:
-        root = QWidget()
-        root.setObjectName("root")
+        root = TechBackdrop()
         self.setCentralWidget(root)
 
         page = QVBoxLayout(root)
@@ -435,14 +410,15 @@ class MainWindow(QMainWindow):
         footer = QHBoxLayout()
         footer.setSpacing(12)
 
-        info = QLabel("ⓘ  测算结果仅供决策参考，请结合真实经营数据动态校准。")
+        info = QLabel("SYSTEM NOTE  /  测算结果仅供决策参考，请结合真实经营数据动态校准")
         info.setObjectName("hint")
 
-        self.copy_button = QPushButton("▣  复制测算结果")
+        self.copy_button = QPushButton("复制测算结果")
         self.copy_button.setObjectName("ghost")
 
-        self.save_button = QPushButton("▣  保存并关闭")
+        self.save_button = QPushButton("保存并关闭")
         self.save_button.setObjectName("primary")
+        add_glow(self.save_button, BLUE, 20, 95)
 
         footer.addWidget(info)
         footer.addStretch(1)
@@ -450,10 +426,10 @@ class MainWindow(QMainWindow):
         footer.addWidget(self.save_button)
         page.addLayout(footer)
 
-    def _build_topbar(self) -> QFrame:
-        frame = QFrame()
+    def _build_topbar(self) -> HudFrame:
+        frame = HudFrame()
         frame.setObjectName("topbar")
-        frame.setMinimumHeight(92)
+        frame.setMinimumHeight(96)
 
         row = QHBoxLayout(frame)
         row.setContentsMargins(18, 12, 18, 12)
@@ -461,34 +437,43 @@ class MainWindow(QMainWindow):
 
         logo = QLabel("↗")
         logo.setAlignment(Qt.AlignCenter)
-        logo.setFixedSize(58, 58)
+        logo.setFixedSize(60, 60)
         logo.setStyleSheet(
-            "background:qlineargradient(x1:0,y1:1,x2:1,y2:0,stop:0 #196ce4,stop:1 #55f4ff);"
-            "border:1px solid #42d7ff;border-radius:12px;color:white;"
-            "font-size:34px;font-weight:900;"
+            "background:qlineargradient(x1:0,y1:1,x2:1,y2:0,"
+            "stop:0 #1264E3,stop:1 #4DEEFF);"
+            "border:1px solid #45DBFF;border-radius:12px;"
+            "color:white;font-size:36px;font-weight:900;"
         )
+        add_glow(logo, CYAN, 28, 135)
 
         title_box = QVBoxLayout()
-        title_box.setSpacing(1)
+        title_box.setSpacing(2)
+        status = QLabel("ROI INTELLIGENCE CONSOLE")
+        status.setObjectName("eyebrow")
         title = QLabel("ROI智能计算器")
         title.setObjectName("title")
-        subtitle = QLabel("输入商品成本与投放参数，实时测算盈亏平衡与目标 ROI")
+        subtitle = QLabel("输入经营参数 · 实时测算盈亏平衡 · 识别广告投放空间")
         subtitle.setObjectName("subtitle")
+        title_box.addWidget(status)
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
 
         slogan = QVBoxLayout()
-        slogan.setSpacing(2)
-        e = QLabel("数 据 驱 动 增 长 · 让 投 放 更 有 确 定 性")
-        e.setObjectName("eyebrow")
-        e.setAlignment(Qt.AlignRight)
-        v = QLabel(f"正式版  v{__version__}")
-        v.setObjectName("hint")
-        v.setAlignment(Qt.AlignRight)
-        slogan.addWidget(e)
-        slogan.addWidget(v)
+        slogan.setSpacing(3)
+        line1 = QLabel("DATA DRIVEN GROWTH")
+        line1.setObjectName("eyebrow")
+        line1.setAlignment(Qt.AlignRight)
+        line2 = QLabel("MAKE ROI VISIBLE")
+        line2.setStyleSheet("color:#8FC7E8;font-size:11px;font-weight:700;")
+        line2.setAlignment(Qt.AlignRight)
+        version = QLabel(f"CORE BUILD  V{__version__}")
+        version.setObjectName("hint")
+        version.setAlignment(Qt.AlignRight)
+        slogan.addWidget(line1)
+        slogan.addWidget(line2)
+        slogan.addWidget(version)
 
-        self.reset_button = QPushButton("↻  重置数据")
+        self.reset_button = QPushButton("重置数据")
         self.reset_button.setObjectName("ghost")
 
         row.addWidget(logo)
@@ -498,35 +483,49 @@ class MainWindow(QMainWindow):
         row.addWidget(self.reset_button)
         return frame
 
-    def _build_left_panel(self) -> QFrame:
-        panel = QFrame()
+    def _panel_header(self, code: str, title_text: str, desc_text: str, accent: str):
+        row = QHBoxLayout()
+        row.setSpacing(12)
+
+        code_label = QLabel(code)
+        code_label.setAlignment(Qt.AlignCenter)
+        code_label.setFixedSize(46, 46)
+        code_label.setStyleSheet(
+            f"background:#082A53;border:1px solid {accent};border-radius:9px;"
+            f"color:{accent};font-size:15px;font-weight:900;"
+        )
+
+        text = QVBoxLayout()
+        text.setSpacing(1)
+        title = QLabel(title_text)
+        title.setObjectName("sectionTitle")
+        desc = QLabel(desc_text)
+        desc.setObjectName("hint")
+        text.addWidget(title)
+        text.addWidget(desc)
+
+        row.addWidget(code_label)
+        row.addLayout(text)
+        row.addStretch(1)
+        return row
+
+    def _build_left_panel(self) -> HudFrame:
+        panel = HudFrame()
         panel.setObjectName("panel")
-        panel.setMinimumWidth(470)
+        panel.setMinimumWidth(480)
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
-        head = QHBoxLayout()
-        icon = QLabel("◆")
-        icon.setAlignment(Qt.AlignCenter)
-        icon.setFixedSize(44, 44)
-        icon.setStyleSheet(
-            "background:#0a75c3;border:1px solid #22dcff;border-radius:9px;"
-            "font-size:20px;color:#6df1ff;"
+        layout.addLayout(
+            self._panel_header(
+                "INPUT",
+                "经营参数",
+                "精准输入商品、平台与售后数据",
+                CYAN,
+            )
         )
-        text = QVBoxLayout()
-        text.setSpacing(1)
-        title = QLabel("经营参数")
-        title.setObjectName("sectionTitle")
-        desc = QLabel("精准输入经营数据，获取更准确的测算结果")
-        desc.setObjectName("hint")
-        text.addWidget(title)
-        text.addWidget(desc)
-        head.addWidget(icon)
-        head.addLayout(text)
-        head.addStretch()
-        layout.addLayout(head)
 
         layout.addWidget(self._build_income_section())
         layout.addWidget(self._build_platform_section())
@@ -534,17 +533,18 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return panel
 
-    def _build_income_section(self) -> QFrame:
-        frame = QFrame()
+    def _build_income_section(self) -> HudFrame:
+        frame = HudFrame()
         frame.setObjectName("section")
 
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(10)
 
-        title = QLabel("🛒   1   商品收入与成本")
+        title = QLabel("01  /  商品收入与成本")
         title.setObjectName("subSectionTitle")
         layout.addWidget(title)
+        layout.addWidget(separator())
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
@@ -563,17 +563,18 @@ class MainWindow(QMainWindow):
         layout.addLayout(grid)
         return frame
 
-    def _build_platform_section(self) -> QFrame:
-        frame = QFrame()
+    def _build_platform_section(self) -> HudFrame:
+        frame = HudFrame()
         frame.setObjectName("section")
 
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(10)
 
-        title = QLabel("◔   2   平台与售后")
+        title = QLabel("02  /  平台与售后")
         title.setObjectName("subSectionTitle")
         layout.addWidget(title)
+        layout.addWidget(separator())
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
@@ -587,17 +588,18 @@ class MainWindow(QMainWindow):
         layout.addLayout(grid)
         return frame
 
-    def _build_return_section(self) -> QFrame:
-        frame = QFrame()
+    def _build_return_section(self) -> HudFrame:
+        frame = HudFrame()
         frame.setObjectName("section")
 
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(10)
 
-        title = QLabel("⟳   3   退货成本口径")
+        title = QLabel("03  /  退货成本口径")
         title.setObjectName("subSectionTitle")
         layout.addWidget(title)
+        layout.addWidget(separator())
 
         self.resell_radio = QRadioButton("可再次销售")
         self.loss_radio = QRadioButton("成本全部损失")
@@ -610,12 +612,12 @@ class MainWindow(QMainWindow):
 
         self.resell_card = ReturnOption(
             self.resell_radio,
-            "◇",
+            "R",
             "退货商品成本可回收",
         )
         self.loss_card = ReturnOption(
             self.loss_radio,
-            "♜",
+            "L",
             "退货商品成本全部计入",
         )
 
@@ -627,61 +629,54 @@ class MainWindow(QMainWindow):
         layout.addLayout(options)
         return frame
 
-    def _build_right_panel(self) -> QFrame:
-        panel = QFrame()
+    def _build_right_panel(self) -> HudFrame:
+        panel = HudFrame()
         panel.setObjectName("panel")
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
-        head = QHBoxLayout()
-        icon = QLabel("↗")
-        icon.setAlignment(Qt.AlignCenter)
-        icon.setFixedSize(44, 44)
-        icon.setStyleSheet(
-            "background:#073e67;border:none;color:#5cecff;font-size:28px;font-weight:900;"
+        head = self._panel_header(
+            "LIVE",
+            "测算结果",
+            "实时分析盈亏平衡与广告承载能力",
+            GREEN,
         )
-        text = QVBoxLayout()
-        text.setSpacing(1)
-        title = QLabel("测算结果")
-        title.setObjectName("sectionTitle")
-        desc = QLabel("基于您输入的参数，智能测算关键指标")
-        desc.setObjectName("hint")
-        text.addWidget(title)
-        text.addWidget(desc)
-
-        slogan = QLabel("MAKE DATA CREATE MORE VALUE")
-        slogan.setObjectName("eyebrow")
-        slogan.setAlignment(Qt.AlignRight)
-
-        head.addWidget(icon)
-        head.addLayout(text)
-        head.addStretch()
-        head.addWidget(slogan)
+        badge = QLabel("●  ENGINE ONLINE")
+        badge.setStyleSheet(
+            "color:#47F2B6;background:#082D31;border:1px solid #1B8F73;"
+            "border-radius:8px;padding:6px 10px;font-size:11px;font-weight:800;"
+        )
+        head.addWidget(badge)
         layout.addLayout(head)
 
         layout.addWidget(self._build_hero())
 
         metrics = QHBoxLayout()
         metrics.setSpacing(12)
-        self.ad_metric = MetricCard("◖", "每单广告费", "#3acbff")
-        self.fee_metric = MetricCard("⌂", "预计平台扣点", "#a777ff")
-        self.margin_metric = MetricCard("%", "推广前毛利率", "#30e2bd")
+        self.ad_metric = MetricCard("AD", "每单广告费", CYAN)
+        self.fee_metric = MetricCard("PF", "预计平台扣点", PURPLE)
+        self.margin_metric = MetricCard("%", "推广前毛利率", GREEN)
         metrics.addWidget(self.ad_metric)
         metrics.addWidget(self.fee_metric)
         metrics.addWidget(self.margin_metric)
         layout.addLayout(metrics)
 
-        layout.addWidget(self._build_formula_card())
-        layout.addWidget(self._build_tip_card())
+        lower = QHBoxLayout()
+        lower.setSpacing(12)
+        lower.addWidget(self._build_formula_card(), 3)
+        lower.addWidget(self._build_tip_card(), 2)
+        layout.addLayout(lower)
+
         layout.addStretch(1)
         return panel
 
-    def _build_hero(self) -> QFrame:
-        frame = QFrame()
+    def _build_hero(self) -> HudFrame:
+        frame = HudFrame()
         frame.setObjectName("hero")
-        frame.setMinimumHeight(260)
+        frame.setMinimumHeight(278)
+        add_glow(frame, CYAN, 24, 78)
 
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(18, 14, 18, 14)
@@ -690,47 +685,67 @@ class MainWindow(QMainWindow):
         top = QHBoxLayout()
 
         result = QVBoxLayout()
-        result.setSpacing(3)
-        title = QLabel("最低保本 ROI   ⓘ")
+        result.setSpacing(4)
+
+        micro = QLabel("BREAK-EVEN INTELLIGENCE")
+        micro.setObjectName("eyebrow")
+        title = QLabel("最低保本 ROI")
         title.setObjectName("subSectionTitle")
         self.roi_value = QLabel("--")
         self.roi_value.setObjectName("metric")
+        add_glow(self.roi_value, CYAN, 28, 105)
         self.roi_caption = QLabel("填写左侧参数后自动测算")
         self.roi_caption.setObjectName("metricCaption")
+        self.roi_caption.setWordWrap(True)
+
+        result.addWidget(micro)
         result.addWidget(title)
         result.addWidget(self.roi_value)
         result.addWidget(self.roi_caption)
 
-        badge_box = QVBoxLayout()
-        badge_box.addStretch()
-        self.range_badge = QLabel("◎  等待测算")
+        status = QVBoxLayout()
+        status.addStretch()
+        self.range_badge = QLabel("STANDBY\n等待测算")
         self.range_badge.setAlignment(Qt.AlignCenter)
-        self.range_badge.setMinimumWidth(160)
+        self.range_badge.setMinimumWidth(164)
         self.range_badge.setStyleSheet(
-            "background:#053954;border:1px solid #24d9e7;border-radius:10px;"
-            "padding:10px 12px;color:#63f2df;font-weight:900;"
+            "background:#07364D;border:1px solid #24D9E7;border-radius:10px;"
+            "padding:10px 12px;color:#63F2DF;font-weight:900;"
         )
-        badge_box.addWidget(self.range_badge)
-        badge_box.addStretch()
+        status.addWidget(self.range_badge)
+        status.addStretch()
 
         top.addLayout(result, 4)
-        top.addLayout(badge_box, 2)
-        top.addWidget(GrowthArt(), 4)
+        top.addLayout(status, 2)
+        top.addWidget(RoiRadarArt(), 4)
+
         layout.addLayout(top, 1)
+        layout.addWidget(separator())
+
+        line = QHBoxLayout()
+        label = QLabel("ROI RISK / PROFIT VECTOR")
+        label.setObjectName("eyebrow")
+        self.scale_value = QLabel("0%")
+        self.scale_value.setObjectName("hint")
+        self.scale_value.setAlignment(Qt.AlignRight)
+        line.addWidget(label)
+        line.addStretch()
+        line.addWidget(self.scale_value)
+        layout.addLayout(line)
 
         self.roi_scale = QProgressBar()
         self.roi_scale.setRange(0, 100)
-        self.roi_scale.setValue(50)
+        self.roi_scale.setValue(0)
         self.roi_scale.setTextVisible(False)
         layout.addWidget(self.roi_scale)
 
         labels = QHBoxLayout()
-        low = QLabel("低 ROI（亏损）")
-        mid = QLabel("盈亏平衡线")
-        high = QLabel("高 ROI（盈利）")
-        low.setStyleSheet("color:#ff5782;font-size:12px;")
-        mid.setObjectName("hint")
-        high.setStyleSheet("color:#55edb0;font-size:12px;")
+        low = QLabel("LOSS")
+        mid = QLabel("BREAK-EVEN")
+        high = QLabel("PROFIT")
+        low.setStyleSheet(f"color:{PINK};font-size:11px;font-weight:800;")
+        mid.setStyleSheet("color:#7DB5DB;font-size:11px;font-weight:800;")
+        high.setStyleSheet(f"color:{GREEN};font-size:11px;font-weight:800;")
         mid.setAlignment(Qt.AlignCenter)
         high.setAlignment(Qt.AlignRight)
         labels.addWidget(low)
@@ -742,21 +757,21 @@ class MainWindow(QMainWindow):
 
         return frame
 
-    def _build_formula_card(self) -> QFrame:
-        frame = QFrame()
+    def _build_formula_card(self) -> HudFrame:
+        frame = HudFrame()
         frame.setObjectName("section")
 
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(7)
 
-        title = QLabel("▣   计算依据")
+        title = QLabel("FORMULA CORE  /  计算依据")
         title.setObjectName("subSectionTitle")
 
         formula = QLabel(
             "预计实收 = 商品售价 × (1 - 预计退款率)\n"
             "预计平台扣点 = 预计实收 × 平台扣点率\n"
-            "可承受广告费 = 预计实收 - 预计平台扣点 - 有效商品成本 - 商品运费 - 运费险\n"
+            "可承受广告费 = 预计实收 - 平台扣点 - 有效商品成本 - 运费 - 运费险\n"
             "保本 ROI = 商品售价 ÷ 可承受广告费"
         )
         formula.setObjectName("formula")
@@ -768,23 +783,28 @@ class MainWindow(QMainWindow):
         layout.addWidget(formula)
         return frame
 
-    def _build_tip_card(self) -> QFrame:
-        frame = QFrame()
+    def _build_tip_card(self) -> HudFrame:
+        frame = HudFrame()
         frame.setObjectName("tipCard")
 
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(14, 10, 14, 10)
-        layout.setSpacing(3)
+        layout.setSpacing(5)
 
-        title = QLabel("💡   如何使用这个结果？")
-        title.setObjectName("tipTitle")
+        title = QLabel("DECISION ASSIST")
+        title.setStyleSheet(f"color:{AMBER};font-size:15px;font-weight:850;")
+        sub = QLabel("如何使用这个结果？")
+        sub.setObjectName("tipTitle")
         text = QLabel(
-            "请先完整填写左侧各项经营参数，再结合保本 ROI 与毛利指标，判断当前商品是否具有足够的广告投放空间。"
+            "先完整填写经营参数，再结合保本 ROI 与毛利率判断广告投放空间。"
+            "保本门槛越低，通常意味着可承受的获客成本空间越充足。"
         )
         text.setObjectName("hint")
         text.setWordWrap(True)
 
         layout.addWidget(title)
+        layout.addWidget(sub)
+        layout.addWidget(separator())
         layout.addWidget(text)
         return frame
 
@@ -833,25 +853,43 @@ class MainWindow(QMainWindow):
             self.roi_value.setText("--")
             if self.sale_price.value() <= 0:
                 self.roi_caption.setText("填写左侧参数后自动测算")
-                self.range_badge.setText("◎  等待测算")
+                self.range_badge.setText("STANDBY\n等待测算")
                 self.roi_scale.setValue(0)
+                self.scale_value.setText("0%")
             else:
                 self.roi_caption.setText("当前参数下推广前已无可承受广告费用")
-                self.range_badge.setText("⚠  需优化成本")
-                self.roi_scale.setValue(10)
+                self.range_badge.setText("ALERT\n需优化成本")
+                self.range_badge.setStyleSheet(
+                    f"background:#3A1830;border:1px solid {PINK};border-radius:10px;"
+                    f"padding:10px 12px;color:#FF86AC;font-weight:900;"
+                )
+                self.roi_scale.setValue(8)
+                self.scale_value.setText("08%")
         else:
             roi = result.break_even_roi
             self.roi_value.setText(f"{roi:.2f}")
             self.roi_caption.setText("达到该 ROI 即可覆盖预计成本并实现盈亏平衡")
             scale = max(0, min(100, int((roi / 6.0) * 100)))
             self.roi_scale.setValue(scale)
+            self.scale_value.setText(f"{scale:02d}%")
 
             if roi <= 2.0:
-                self.range_badge.setText("◎  推荐范围\n投放空间充足")
+                self.range_badge.setText("OPTIMAL\n投放空间充足")
+                badge_color = GREEN
+                badge_bg = "#0B3A34"
             elif roi <= 3.5:
-                self.range_badge.setText("◎  建议范围\n重点监控利润")
+                self.range_badge.setText("WATCH\n重点监控利润")
+                badge_color = CYAN
+                badge_bg = "#07364D"
             else:
-                self.range_badge.setText("⚠  保本偏高\n谨慎放量")
+                self.range_badge.setText("CAUTION\n保本门槛偏高")
+                badge_color = AMBER
+                badge_bg = "#403516"
+
+            self.range_badge.setStyleSheet(
+                f"background:{badge_bg};border:1px solid {badge_color};border-radius:10px;"
+                f"padding:10px 12px;color:{badge_color};font-weight:900;"
+            )
 
         self.ad_metric.value.setText(f"¥{result.max_ad_spend:.2f}")
         self.fee_metric.value.setText(f"¥{result.platform_fee:.2f}")
@@ -917,11 +955,8 @@ class MainWindow(QMainWindow):
 
     def copy_result(self) -> None:
         QApplication.clipboard().setText(self.result_text())
-        self.copy_button.setText("✓  已复制")
-        QTimer.singleShot(
-            1200,
-            lambda: self.copy_button.setText("▣  复制测算结果"),
-        )
+        self.copy_button.setText("已复制")
+        QTimer.singleShot(1200, lambda: self.copy_button.setText("复制测算结果"))
 
     def save_and_close(self) -> None:
         try:
