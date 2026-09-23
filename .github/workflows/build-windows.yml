@@ -1,0 +1,87 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run tests
+        shell: pwsh
+        run: pytest -q
+
+      - name: Read version
+        shell: pwsh
+        run: |
+          $line = Get-Content "src/roi_calculator/version.py" | Select-String '__version__ = "(.+)"'
+          $version = $line.Matches[0].Groups[1].Value
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Generate application icon
+        shell: pwsh
+        run: python tools/generate_icon.py
+
+      - name: Build single-file EXE
+        shell: pwsh
+        run: pyinstaller --noconfirm --clean roi_calculator.spec
+
+      - name: EXE self-test
+        shell: pwsh
+        run: |
+          $exe = ".\dist\ROI-Calculator-v$env:APP_VERSION.exe"
+          $process = Start-Process -FilePath $exe -ArgumentList "--self-test" -PassThru -Wait
+          if ($process.ExitCode -ne 0) {
+            throw "EXE self-test failed with exit code $($process.ExitCode)"
+          }
+
+      - name: Create checksum
+        shell: pwsh
+        run: |
+          $exe = ".\dist\ROI-Calculator-v$env:APP_VERSION.exe"
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  ROI-Calculator-v$env:APP_VERSION.exe" | Set-Content ".\dist\SHA256SUMS.txt"
+
+      - name: Upload Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ROI-Calculator-v${{ env.APP_VERSION }}-Windows
+          path: |
+            dist/ROI-Calculator-v${{ env.APP_VERSION }}.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:APP_VERSION"
+          $exe = "dist/ROI-Calculator-v$env:APP_VERSION.exe"
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag $exe "dist/SHA256SUMS.txt" --clobber
+          } else {
+            gh release create $tag $exe "dist/SHA256SUMS.txt" --target "$env:GITHUB_SHA" --title "ROI智能计算器 $tag" --notes "Windows 单文件正式版。已通过单元测试和 EXE 自检。"
+          }
